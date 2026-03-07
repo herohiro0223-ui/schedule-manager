@@ -195,7 +195,7 @@ export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
 
     // まずスケジュールページを試す
     try {
-      await page.goto(SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.goto(SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.waitForTimeout(1000);
     } catch {}
 
@@ -203,7 +203,7 @@ export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
     if (page.url().includes('login')) {
       // headlessモードではCAPTCHA対応不可のため、自動ログインを試みる
       console.log('SALON BOARD: セッション切れ、自動ログインを試行...');
-      await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
       await page.waitForTimeout(1000);
 
       const loginId = process.env.SALON_BOARD_ID ?? '';
@@ -218,7 +218,7 @@ export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
 
       // ログイン完了を待つ（headlessなので短めのタイムアウト）
       try {
-        await page.waitForURL('**/KLP/**', { timeout: 15000 });
+        await page.waitForURL('**/KLP/**', { timeout: 60000 });
       } catch {
         // CAPTCHAやパスワード変更画面の可能性
         const currentUrl = page.url();
@@ -247,7 +247,7 @@ export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
       await saveSession(context, 'salonboard');
 
       // スケジュールページへ
-      await page.goto(SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto(SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
     }
 
     // 指定日のスケジュールを取得する関数
@@ -276,7 +276,7 @@ export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
         throw new Error('セッション切れ。npx tsx src/relogin-salonboard.ts を実行してください');
       }
       try {
-        await page.waitForSelector('.jscScheduleMainTableStaff', { timeout: 30000 });
+        await page.waitForSelector('.jscScheduleMainTableStaff', { timeout: 90000 });
         await page.waitForTimeout(3000);
       } catch {
         const html = await page.content();

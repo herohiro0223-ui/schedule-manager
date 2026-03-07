@@ -182,14 +182,14 @@ export async function scrapeReworks(dateStr?: string | string[]): Promise<void> 
     const page = await context.newPage();
 
     // ダッシュボードアクセスでセッション有効性を確認
-    await page.goto(`${REWORKS_URL}/master/main.php`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await page.goto(`${REWORKS_URL}/master/main.php`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(2000);
     const content = await page.content();
 
     // ログインが必要な場合
     if (content.length < 100 || !content.includes('satokotsu')) {
       console.log('レセプトワークス: ログイン中...');
-      await page.goto(`${REWORKS_URL}/master/login/`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.goto(`${REWORKS_URL}/master/login/`, { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.waitForTimeout(1000);
 
       const user = process.env.REWORKS_USER ?? '';
@@ -224,7 +224,7 @@ export async function scrapeReworks(dateStr?: string | string[]): Promise<void> 
 
     // ポップアップを起動
     console.log(`レセプトワークス: ${dates.length}日分のスケジュールを取得中...`);
-    const popupPromise = context.waitForEvent('page', { timeout: 15000 });
+    const popupPromise = context.waitForEvent('page', { timeout: 60000 });
     await page.click('input[value="閲覧"]');
     const popup = await popupPromise;
 
