@@ -68,9 +68,10 @@ async function syncRange(days: number) {
   isSyncing = true;
   const start = Date.now();
   const today = todayJST();
-  const dates = Array.from({ length: days + 1 }, (_, i) => addDays(today, i));
+  const pastDays = 30; // 過去1ヶ月分も同期
+  const dates = Array.from({ length: pastDays + days + 1 }, (_, i) => addDays(today, i - pastDays));
   console.log(`\n${'='.repeat(50)}`);
-  console.log(`拡張同期開始: ${today} 〜 ${addDays(today, days)} (${days + 1}日間)`);
+  console.log(`拡張同期開始: ${addDays(today, -pastDays)} 〜 ${addDays(today, days)} (${dates.length}日間)`);
   console.log('='.repeat(50));
 
   // 両方とも1ブラウザで複数日を処理
