@@ -1,7 +1,8 @@
 /**
  * 統合スクレイパー エントリポイント
  *
- * 全ソースの同期を実行し、node-cron で定期実行する。
+ * SALON BOARD + レセプトワークスを Mac でローカル実行。
+ * Google Calendar は GitHub Actions で同期（別ワークフロー）。
  */
 
 import 'dotenv/config';
@@ -9,7 +10,6 @@ import cron from 'node-cron';
 import { scrapeSalonBoard } from './scrapers/salonboard.js';
 import { scrapeReworks } from './scrapers/reworks.js';
 import { syncGoogleCalendar } from './scrapers/google-calendar.js';
-// import { syncICloudCalendar } from './scrapers/icloud-calendar.js';
 import { supabase } from './lib/supabase.js';
 
 /** 日付を YYYY-MM-DD 形式で生成 */
@@ -44,10 +44,7 @@ async function syncAll(dateStr?: string) {
   const tasks: { name: string; fn: Promise<void> }[] = [
     { name: 'SALON BOARD', fn: scrapeSalonBoard(dateStr) },
     { name: 'レセプトワークス', fn: scrapeReworks(dateStr) },
-    { name: 'Google Calendar', fn: syncGoogleCalendar() },
   ];
-
-  // iCloud Calendar は無効化（不要）
 
   const results = await Promise.allSettled(tasks.map(t => t.fn));
 
@@ -64,18 +61,17 @@ async function syncAll(dateStr?: string) {
 
 /** 拡張同期（複数日） */
 async function syncRange(days: number) {
+  if (isSyncing) {
+    console.log('[skip] 前回の同期がまだ実行中です');
+    return;
+  }
+  isSyncing = true;
   const start = Date.now();
   const today = todayJST();
   const dates = Array.from({ length: days + 1 }, (_, i) => addDays(today, i));
   console.log(`\n${'='.repeat(50)}`);
   console.log(`拡張同期開始: ${today} 〜 ${addDays(today, days)} (${days + 1}日間)`);
   console.log('='.repeat(50));
-
-  // カレンダーは常に全件同期
-  syncGoogleCalendar().catch(e => console.error('Google Calendar:', e));
-  if (process.env.APPLE_ID && process.env.APPLE_APP_PASSWORD) {
-    syncICloudCalendar().catch(e => console.error('iCloud Calendar:', e));
-  }
 
   // レセプトワークスは1回のブラウザで複数日を処理可能
   // SALON BOARDは日ごとにURL変更で処理
@@ -90,6 +86,7 @@ async function syncRange(days: number) {
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   console.log(`\n拡張同期完了 (${elapsed}秒)`);
+  isSyncing = false;
 }
 
 // 引数チェック
@@ -106,28 +103,20 @@ if (rangeDays > 0) {
   // 一回だけ実行して終了
   syncAll(dateArg).then(() => process.exit(0));
 } else {
-  // まず即時実行：今日の同期
-  syncAll(dateArg);
+  // まず即時実行：60日分同期
+  syncRange(60);
 
-  // 1分ごとに今日分を同期（24時間・毎日）
-  cron.schedule('* * * * *', () => {
+  // 15分ごとに今日分を同期（新規予約をキャッチ）
+  cron.schedule('*/15 * * * *', () => {
     console.log('\n[cron] 定期同期を開始...');
     syncAll();
   }, {
     timezone: 'Asia/Tokyo',
   });
 
-  // 毎朝6:00に今後7日分を同期
-  cron.schedule('0 6 * * *', () => {
-    console.log('\n[cron] 週間同期を開始...');
-    syncRange(7);
-  }, {
-    timezone: 'Asia/Tokyo',
-  });
-
-  // 毎週日曜5:00に今後60日分を同期
-  cron.schedule('0 5 * * 0', () => {
-    console.log('\n[cron] 2ヶ月同期を開始...');
+  // 2時間ごとに60日分を同期
+  cron.schedule('0 */2 * * *', () => {
+    console.log('\n[cron] 60日分同期を開始...');
     syncRange(60);
   }, {
     timezone: 'Asia/Tokyo',
@@ -144,7 +133,7 @@ if (rangeDays > 0) {
         console.log('\n[manual] 手動同期リクエストを受信');
         try {
           await supabase.from('sync_requests').update({ status: 'running' }).eq('id', id);
-          await syncAll();
+          await syncRange(60);
           await supabase.from('sync_requests').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', id);
         } catch (err) {
           await supabase.from('sync_requests').update({ status: 'error', completed_at: new Date().toISOString() }).eq('id', id);
@@ -158,9 +147,8 @@ if (rangeDays > 0) {
     });
 
   console.log('\n定期同期スケジューラーを開始しました');
-  console.log('- 24時間・毎日: 1分ごと（当日）※同期中はスキップ');
-  console.log('- 毎朝6:00: 今後7日分');
-  console.log('- 毎週日曜5:00: 今後2ヶ月分');
-  console.log('- 手動同期: Web UIから随時');
+  console.log('- 15分ごと: 当日分（新規予約キャッチ）');
+  console.log('- 2時間ごと: 今後60日分');
+  console.log('- 手動同期: Web UIから随時（60日分）');
   console.log('Ctrl+C で停止\n');
 }
