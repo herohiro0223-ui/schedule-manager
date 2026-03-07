@@ -9,7 +9,7 @@ import cron from 'node-cron';
 import { scrapeSalonBoard } from './scrapers/salonboard.js';
 import { scrapeReworks } from './scrapers/reworks.js';
 import { syncGoogleCalendar } from './scrapers/google-calendar.js';
-import { syncICloudCalendar } from './scrapers/icloud-calendar.js';
+// import { syncICloudCalendar } from './scrapers/icloud-calendar.js';
 import { supabase } from './lib/supabase.js';
 
 /** 日付を YYYY-MM-DD 形式で生成 */
@@ -47,10 +47,7 @@ async function syncAll(dateStr?: string) {
     { name: 'Google Calendar', fn: syncGoogleCalendar() },
   ];
 
-  // iCloud Calendar は環境変数がある場合のみ実行
-  if (process.env.APPLE_ID && process.env.APPLE_APP_PASSWORD) {
-    tasks.push({ name: 'iCloud Calendar', fn: syncICloudCalendar() });
-  }
+  // iCloud Calendar は無効化（不要）
 
   const results = await Promise.allSettled(tasks.map(t => t.fn));
 
