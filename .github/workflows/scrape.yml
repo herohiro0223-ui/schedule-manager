@@ -5,8 +5,6 @@ on:
     # 営業時間（8:00-21:00 JST = 23:00-12:00 UTC）15分ごと → 7日分同期
     - cron: '*/15 23 * * *'      # 08:00-09:00 JST
     - cron: '*/15 0-11 * * *'    # 09:00-21:00 JST (next day UTC)
-    # 毎週日曜5:00 JST（20:00 UTC土曜）60日分同期
-    - cron: '0 20 * * 6'
   workflow_dispatch:  # 手動実行ボタン
 
 env:
@@ -20,24 +18,8 @@ env:
   GOOGLE_ICAL_URL: ${{ secrets.GOOGLE_ICAL_URL }}
 
 jobs:
-  # 15分ごと — 今後7日分を同期
+  # 15分ごと — 今後60日分を同期
   sync:
-    if: github.event.schedule != '0 20 * * 6'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci --workspace=apps/scraper
-      - run: npx playwright install chromium
-      - run: npx tsx apps/scraper/src/index.ts --range=7
-
-  # 毎週日曜5:00 JST — 60日分同期
-  sync-monthly:
-    if: github.event.schedule == '0 20 * * 6'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
