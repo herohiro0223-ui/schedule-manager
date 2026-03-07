@@ -1,0 +1,16 @@
+{
+  "name": "schedule-manager",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w apps/web",
+    "dev:scraper": "npm run dev -w apps/scraper",
+    "build:web": "npm run build -w apps/web",
+    "scrape": "npm run scrape -w apps/scraper",
+    "scrape:salon": "npm run scrape:salon -w apps/scraper",
+    "scrape:reworks": "npm run scrape:reworks -w apps/scraper",
+    "scrape:google": "npm run scrape:google -w apps/scraper"
+  }
+}

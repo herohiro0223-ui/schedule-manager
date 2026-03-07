@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.schedule-manager.scraper</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/satohiroshi/Downloads/スケジュール管理/schedule-manager/node_modules/.bin/tsx</string>
+        <string>apps/scraper/src/index.ts</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/satohiroshi/Downloads/スケジュール管理/schedule-manager</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/Users/satohiroshi/Downloads/スケジュール管理/schedule-manager/node_modules/.bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/schedule-manager-scraper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/schedule-manager-scraper-error.log</string>
+</dict>
+</plist>

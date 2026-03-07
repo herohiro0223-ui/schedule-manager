@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.env
+.env.local
+apps/scraper/sessions/
+apps/scraper/auth/
+dist/
+out/
+.vercel/
+*.tsbuildinfo
+apps/scraper/google-credentials.json
+apps/scraper/logs/
+supabase/.temp/

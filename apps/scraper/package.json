@@ -1,0 +1,29 @@
+{
+  "name": "scraper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "scrape": "tsx src/index.ts",
+    "scrape:salon": "tsx src/scrapers/salonboard.ts",
+    "scrape:reworks": "tsx src/scrapers/reworks.ts",
+    "scrape:google": "tsx src/scrapers/google-calendar.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.0",
+    "dotenv": "^16.4.7",
+    "googleapis": "^144.0.0",
+    "node-cron": "^3.0.3",
+    "patchright": "^1.58.2",
+    "playwright": "^1.50.0",
+    "tsdav": "^2.1.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11",
+    "postgres": "^3.4.8",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
