@@ -1,5 +1,5 @@
 #!/bin/bash
 # スケジュール管理 スクレイパー起動スクリプト
-cd "$(dirname "$0")"
+cd "/Users/satohiroshi/schedule-manager"
 export PATH="/usr/local/bin:$PATH"
-exec npx tsx src/index.ts >> logs/scraper.log 2>&1
+exec /usr/local/bin/node --import tsx/esm apps/scraper/src/index.ts

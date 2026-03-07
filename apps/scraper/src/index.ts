@@ -73,14 +73,9 @@ async function syncRange(days: number) {
   console.log(`拡張同期開始: ${today} 〜 ${addDays(today, days)} (${days + 1}日間)`);
   console.log('='.repeat(50));
 
-  // レセプトワークスは1回のブラウザで複数日を処理可能
-  // SALON BOARDは日ごとにURL変更で処理
+  // 両方とも1ブラウザで複数日を処理
   await Promise.allSettled([
-    (async () => {
-      for (const date of dates) {
-        await scrapeSalonBoard(date).catch(e => console.error(`SALON BOARD ${date}:`, e));
-      }
-    })(),
+    scrapeSalonBoard(dates),
     scrapeReworks(dates),
   ]);
 

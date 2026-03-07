@@ -6,15 +6,15 @@
     <string>com.schedule-manager.scraper</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/satohiroshi/Downloads/スケジュール管理/schedule-manager/node_modules/.bin/tsx</string>
-        <string>apps/scraper/src/index.ts</string>
+        <string>/bin/bash</string>
+        <string>/Users/satohiroshi/schedule-manager/apps/scraper/run.sh</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/satohiroshi/Downloads/スケジュール管理/schedule-manager</string>
+    <string>/Users/satohiroshi/schedule-manager</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/Users/satohiroshi/Downloads/スケジュール管理/schedule-manager/node_modules/.bin</string>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

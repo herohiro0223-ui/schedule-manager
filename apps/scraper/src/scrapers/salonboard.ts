@@ -158,15 +158,12 @@ const EXTRACT_SCRIPT = `
 })()
 `;
 
-export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
-  const targetDate = dateStr ?? today();
-  let browser;
+export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<void> {
+  const dates = Array.isArray(dateStr) ? dateStr : [dateStr ?? today()];
+  const sortedDates = [...dates].sort();
+  const browser = await chromium.launch({ headless: false });
 
   try {
-    browser = await chromium.launch({
-      headless: true,
-    });
-
     await logSync('harilabo', 'running');
 
     // Supabase からセッションを読み込み
@@ -201,7 +198,6 @@ export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
 
     // ログインページにリダイレクトされた場合
     if (page.url().includes('login')) {
-      // headlessモードではCAPTCHA対応不可のため、自動ログインを試みる
       console.log('SALON BOARD: セッション切れ、自動ログインを試行...');
       await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
       await page.waitForTimeout(1000);
@@ -216,71 +212,60 @@ export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
       await page.fill('input[name="password"]', password);
       await page.click('a.common-CNCcommon__primaryBtn');
 
-      // ログイン完了を待つ（headlessなので短めのタイムアウト）
       try {
         await page.waitForURL('**/KLP/**', { timeout: 60000 });
       } catch {
-        // CAPTCHAやパスワード変更画面の可能性
         const currentUrl = page.url();
         if (currentUrl.includes('password')) {
-          // Web UIに通知
-          await supabase.from('notifications').insert({
-            source: 'harilabo',
-            date: targetDate,
-            start_time: '00:00',
-            title: 'SALON BOARD: パスワード変更が必要です',
-          });
-          throw new Error('パスワード変更が必要です。ブラウザで手動変更してください。その後 npx tsx src/relogin-salonboard.ts を実行してセッションを更新してください');
+          throw new Error('パスワード変更が必要です。npx tsx src/relogin-salonboard.ts を実行してください');
         }
-        // Web UIに通知
-        await supabase.from('notifications').insert({
-          source: 'harilabo',
-          date: targetDate,
-          start_time: '00:00',
-          title: 'SALON BOARD: セッション切れ。再ログインが必要です',
-        });
-        throw new Error('自動ログイン失敗（CAPTCHAの可能性）。npx tsx src/relogin-salonboard.ts を実行してセッションを更新してください');
+        throw new Error('自動ログイン失敗（CAPTCHAの可能性）。npx tsx src/relogin-salonboard.ts を実行してください');
       }
       console.log('SALON BOARD: ログイン成功');
-
-      // セッション保存（Supabase）
       await saveSession(context, 'salonboard');
-
-      // スケジュールページへ
-      await page.goto(SCHEDULE_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
     }
 
-    // 指定日のスケジュールを取得する関数
-    async function scrapeDate(date: string): Promise<Appointment[]> {
+    console.log(`SALON BOARD: ${sortedDates.length}日分のスケジュールを取得中...`);
+    let totalCount = 0;
+
+    for (const date of sortedDates) {
       const dateCompact = date.replace(/-/g, '');
 
-      // ページ読み込み（最大2回リトライ）
-      for (let attempt = 0; attempt < 2; attempt++) {
+      // ページ読み込み（最大3回リトライ）
+      let loaded = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
         try {
           await page.goto(`${SCHEDULE_URL}?date=${dateCompact}`, {
-            waitUntil: 'networkidle', timeout: 60000,
+            waitUntil: 'domcontentloaded', timeout: 60000,
           });
+          const url = page.url();
+          if (url === 'about:blank') throw new Error('about:blank');
+          if (url.includes('login')) {
+            throw new Error('セッション切れ。npx tsx src/relogin-salonboard.ts を実行してください');
+          }
+          loaded = true;
           break;
-        } catch {
-          if (attempt === 0) {
-            console.log('SALON BOARD: ページ読み込みリトライ...');
-            await page.waitForTimeout(3000);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.includes('セッション切れ')) throw e;
+          if (attempt < 2) {
+            console.log(`SALON BOARD: ${date} リトライ (${attempt + 1}/3) - ${msg}`);
+            await page.waitForTimeout(5000);
           }
         }
       }
-
-      // スケジュール描画を待つ（AJAX読み込み完了まで）
-      const currentUrl = page.url();
-      console.log(`SALON BOARD: ページURL: ${currentUrl}`);
-      if (currentUrl.includes('login')) {
-        throw new Error('セッション切れ。npx tsx src/relogin-salonboard.ts を実行してください');
+      if (!loaded) {
+        console.log(`SALON BOARD: ${date} スキップ`);
+        await replaceAppointments('harilabo', date, []);
+        continue;
       }
+
+      // スケジュール描画を待つ
       try {
-        await page.waitForSelector('.jscScheduleMainTableStaff', { timeout: 90000 });
-        await page.waitForTimeout(3000);
+        await page.waitForSelector('.jscScheduleMainTableStaff', { timeout: 30000 });
+        await page.waitForTimeout(2000);
       } catch {
-        const html = await page.content();
-        console.log(`SALON BOARD: 描画待ちタイムアウト (HTML長: ${html.length}, タイトル: ${await page.title()})`);
+        // 描画待ちタイムアウト（予約なしの日もある）
       }
 
       const rawData = await page.evaluate(EXTRACT_SCRIPT) as {
@@ -295,16 +280,11 @@ export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
       const seen = new Set<string>();
       const appointments: Appointment[] = [];
 
-      // デバッグ: 全スタッフ名と予約数を出力
-      const staffCounts: Record<string, number> = {};
-      rawData.forEach(item => {
-        staffCounts[item.staffName || '(空)'] = (staffCounts[item.staffName || '(空)'] || 0) + 1;
-      });
-      console.log(`  DOM抽出: ${rawData.length}件 スタッフ別:`, staffCounts);
-
       rawData.forEach((item, idx) => {
-        // 佐藤 洋のデータのみ取得
         if (!item.staffName.includes('佐藤') || !item.staffName.includes('洋')) return;
+        // 休憩・ToDo・接骨院タスクは除外（予約のみ）
+        if (item.type === 'todo') return;
+        if (item.customerName === '接骨院' || item.services.includes('接骨院')) return;
 
         const key = `${item.staffName}-${item.customerName}-${item.startTime}-${item.services}`;
         if (seen.has(key)) return;
@@ -316,11 +296,7 @@ export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
           date: date,
           start_time: item.startTime || '00:00',
           end_time: item.endTime || undefined,
-          title: item.type === 'todo'
-            ? item.services
-            : item.services
-              ? `${item.services}`
-              : '施術',
+          title: item.services || '施術',
           customer_name: item.customerName || undefined,
           staff_name: item.staffName || undefined,
           service_types: item.services ? item.services.split(' / ') : [],
@@ -330,27 +306,23 @@ export async function scrapeSalonBoard(dateStr?: string): Promise<void> {
         });
       });
 
-      return appointments;
+      console.log(`SALON BOARD: ${date} → ${appointments.length} 件`);
+      appointments.forEach(a => {
+        console.log(`  ${a.start_time}-${a.end_time ?? '??'} ${a.customer_name ?? a.title} (${a.staff_name})`);
+      });
+
+      await replaceAppointments('harilabo', date, appointments);
+      totalCount += appointments.length;
     }
 
-    // 対象日のスケジュールを取得
-    console.log(`SALON BOARD: ${targetDate} のスケジュールを取得中...`);
-    const appointments = await scrapeDate(targetDate);
-
-    console.log(`SALON BOARD: ${appointments.length} 件の予約を取得`);
-    appointments.forEach(a => {
-      console.log(`  ${a.start_time}-${a.end_time ?? '??'} ${a.customer_name ?? a.title} (${a.staff_name})`);
-    });
-
-    await replaceAppointments('harilabo', targetDate, appointments);
-    await logSync('harilabo', 'success', appointments.length);
-    console.log('SALON BOARD: 同期完了');
+    await logSync('harilabo', 'success', totalCount);
+    console.log(`SALON BOARD: 同期完了 (${sortedDates.length}日, ${totalCount}件)`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('SALON BOARD: エラー', message);
     await logSync('harilabo', 'error', 0, message);
   } finally {
-    if (browser) await browser.close();
+    await browser.close();
   }
 }
 
