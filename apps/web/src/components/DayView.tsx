@@ -6,6 +6,7 @@ import { AppointmentCard } from './AppointmentCard';
 import { Timeline } from './Timeline';
 import { SyncStatus } from './SyncStatus';
 import { TaskList } from './TaskList';
+import { PendingRequestsList } from './PendingRequestsList';
 import { type AppointmentSource } from '../lib/supabase';
 
 interface DayViewProps {
@@ -145,6 +146,9 @@ export function DayView({ date }: DayViewProps) {
       ) : (
         <Timeline appointments={filtered} />
       )}
+
+      {/* 予約リクエスト（未登録セクション） */}
+      <PendingRequestsList date={date} />
 
       {/* タスク */}
       <TaskList date={date} />

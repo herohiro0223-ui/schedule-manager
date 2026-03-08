@@ -22,6 +22,7 @@ export interface Appointment {
   end_time?: string;   // HH:MM
   title: string;
   customer_name?: string;
+  customer_name_kana?: string;
   staff_name?: string;
   service_types?: string[];
   appointment_type?: string;
@@ -29,6 +30,21 @@ export interface Appointment {
   color?: string;
   notes?: string;
   raw_data?: Record<string, unknown>;
+}
+
+export type RequestChannel = 'line' | 'messenger' | 'gmail' | 'phone' | 'other';
+export type RequestStatus = 'pending' | 'registered' | 'cancelled';
+
+export interface AppointmentRequest {
+  id?: string;
+  customer_name: string;
+  date: string;
+  start_time: string;
+  end_time?: string;
+  source_channel: RequestChannel;
+  status: RequestStatus;
+  matched_appointment_id?: string;
+  message_text?: string;
 }
 
 // Supabaseへのupsert（重複防止）
@@ -235,6 +251,147 @@ export async function replaceAllBySource(
       }
     }
   }
+}
+
+/**
+ * 予約リクエストとSALON BOARD予約の自動突き合わせ
+ * - pending状態のリクエストとSALON BOARDの予約をマッチング
+ * - 日付 + 時間（±30分）+ 顧客名（あいまい一致）でマッチ判定
+ * - マッチしたら自動で registered に更新
+ * - マッチしなければ通知テーブルにアラート挿入
+ */
+export async function reconcileRequests(dates: string[]) {
+  try {
+    // pending状態のリクエストを取得
+    const { data: pendingRequests, error: reqError } = await supabase
+      .from('appointment_requests')
+      .select('*')
+      .eq('status', 'pending')
+      .in('date', dates);
+
+    if (reqError) {
+      console.error(`[reconcile] リクエスト取得失敗: ${reqError.message}`);
+      return;
+    }
+
+    if (!pendingRequests || pendingRequests.length === 0) {
+      console.log('[reconcile] pending リクエストなし');
+      return;
+    }
+
+    // 対象日のSALON BOARD予約を取得
+    const { data: appointments, error: aptError } = await supabase
+      .from('appointments')
+      .select('*')
+      .eq('source', 'harilabo')
+      .in('date', dates);
+
+    if (aptError) {
+      console.error(`[reconcile] 予約取得失敗: ${aptError.message}`);
+      return;
+    }
+
+    const aptList = appointments ?? [];
+    let matchCount = 0;
+
+    for (const req of pendingRequests) {
+      const match = aptList.find(apt => {
+        // 日付一致
+        if (apt.date !== req.date) return false;
+
+        // 時間（±30分以内）
+        if (!isTimeClose(req.start_time, apt.start_time, 30)) return false;
+
+        // 顧客名（あいまい一致）
+        if (!isFuzzyNameMatch(req.customer_name, apt.customer_name ?? '')) return false;
+
+        return true;
+      });
+
+      if (match) {
+        // マッチ → registered に更新
+        const { error: updateError } = await supabase
+          .from('appointment_requests')
+          .update({
+            status: 'registered',
+            matched_appointment_id: match.id,
+          })
+          .eq('id', req.id);
+
+        if (updateError) {
+          console.error(`[reconcile] ステータス更新失敗 (${req.id}): ${updateError.message}`);
+        } else {
+          matchCount++;
+          console.log(`[reconcile] マッチ: ${req.customer_name} ${req.date} ${req.start_time} → ${match.customer_name} ${match.start_time}`);
+        }
+      }
+    }
+
+    const unmatchedCount = pendingRequests.length - matchCount;
+    console.log(`[reconcile] 結果: ${matchCount}件マッチ, ${unmatchedCount}件未マッチ`);
+
+    // 未マッチが残っている場合、通知テーブルにアラート挿入
+    if (unmatchedCount > 0) {
+      const unmatched = pendingRequests.filter(req => {
+        return !aptList.some(apt =>
+          apt.date === req.date &&
+          isTimeClose(req.start_time, apt.start_time, 30) &&
+          isFuzzyNameMatch(req.customer_name, apt.customer_name ?? '')
+        );
+      });
+
+      const notifications = unmatched.map(req => ({
+        source: 'harilabo' as const,
+        date: req.date,
+        start_time: req.start_time,
+        end_time: req.end_time ?? null,
+        title: `SALON BOARD未登録: ${req.customer_name}`,
+        customer_name: req.customer_name,
+        staff_name: null,
+      }));
+
+      if (notifications.length > 0) {
+        const { error: notifError } = await supabase
+          .from('notifications')
+          .insert(notifications);
+
+        if (notifError) {
+          console.error(`[reconcile] 通知挿入失敗: ${notifError.message}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[reconcile] エラー:', err);
+  }
+}
+
+/** 時間がtolerance分以内かチェック (HH:MM形式) */
+function isTimeClose(timeA: string, timeB: string, toleranceMinutes: number): boolean {
+  const toMin = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+  };
+  return Math.abs(toMin(timeA) - toMin(timeB)) <= toleranceMinutes;
+}
+
+/** 顧客名のあいまい一致（部分一致 or 姓のみ一致） */
+function isFuzzyNameMatch(nameA: string, nameB: string): boolean {
+  if (!nameA || !nameB) return false;
+  const a = nameA.replace(/\s+/g, '').trim();
+  const b = nameB.replace(/\s+/g, '').trim();
+
+  // 完全一致
+  if (a === b) return true;
+
+  // 部分一致（片方がもう片方を含む）
+  if (a.includes(b) || b.includes(a)) return true;
+
+  // 姓（最初の1〜3文字）が一致
+  const surnameA = a.slice(0, Math.min(3, a.length));
+  const surnameB = b.slice(0, Math.min(3, b.length));
+  if (surnameA.length >= 2 && surnameA === surnameB) return true;
+
+  return false;
 }
 
 // 同期ログ記録

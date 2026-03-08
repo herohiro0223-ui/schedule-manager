@@ -5,7 +5,11 @@ import { Calendar } from '../components/Calendar';
 import { DayView } from '../components/DayView';
 import { ToastManager } from '../components/ToastManager';
 import { NotificationPanel } from '../components/NotificationPanel';
+import { SearchPanel } from '../components/SearchPanel';
 import { useNotifications } from '../hooks/useNotifications';
+import { usePendingRequestCount } from '../hooks/useAppointmentRequests';
+import { QuickAddFAB } from '../components/QuickAddFAB';
+import { RequestForm } from '../components/RequestForm';
 
 function todayStr(): string {
   const d = new Date();
@@ -16,7 +20,10 @@ export default function Home() {
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [showCalendar, setShowCalendar] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [showRequestForm, setShowRequestForm] = useState(false);
   const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications();
+  const pendingRequestCount = usePendingRequestCount();
 
   const goToday = () => setSelectedDate(todayStr());
 
@@ -40,16 +47,22 @@ export default function Home() {
     setSelectedDate(date);
     setShowCalendar(false);
     setShowNotifications(false);
+    setShowSearch(false);
   }, []);
+
+  const toggleSearch = () => {
+    setShowSearch(prev => !prev);
+    if (!showSearch) { setShowCalendar(false); setShowNotifications(false); }
+  };
 
   const toggleNotifications = () => {
     setShowNotifications(prev => !prev);
-    if (!showNotifications) setShowCalendar(false);
+    if (!showNotifications) { setShowCalendar(false); setShowSearch(false); }
   };
 
   const toggleCalendar = () => {
     setShowCalendar(prev => !prev);
-    if (!showCalendar) setShowNotifications(false);
+    if (!showCalendar) { setShowNotifications(false); setShowSearch(false); }
   };
 
   return (
@@ -67,6 +80,18 @@ export default function Home() {
               className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded-full transition-all"
             >
               今日
+            </button>
+            {/* 検索アイコン */}
+            <button
+              onClick={toggleSearch}
+              className={`p-1.5 rounded-lg transition-all ${
+                showSearch ? 'bg-white/20' : 'hover:bg-white/10'
+              }`}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
             </button>
             {/* ベルアイコン（通知） */}
             <button
@@ -118,6 +143,27 @@ export default function Home() {
         </div>
       </header>
 
+      {/* 未登録リクエストアラートバナー */}
+      {pendingRequestCount > 0 && (
+        <div className="bg-red-500 text-white px-4 py-2 text-xs font-medium flex items-center justify-between">
+          <span>SALON BOARD未登録のリクエストが{pendingRequestCount}件あります</span>
+          <button
+            onClick={() => setShowRequestForm(true)}
+            className="text-[11px] bg-white/20 hover:bg-white/30 px-2 py-0.5 rounded transition-all"
+          >
+            確認
+          </button>
+        </div>
+      )}
+
+      {/* 検索パネル（トグル表示、他パネルと排他） */}
+      {showSearch && (
+        <SearchPanel
+          onNavigateToDate={navigateToDate}
+          onClose={() => setShowSearch(false)}
+        />
+      )}
+
       {/* 通知パネル（トグル表示、カレンダーと排他） */}
       {showNotifications && (
         <NotificationPanel
@@ -145,6 +191,16 @@ export default function Home() {
       <main className="px-4 py-4">
         <DayView date={selectedDate} />
       </main>
+
+      {/* FAB（予約リクエスト追加） */}
+      <QuickAddFAB onClick={() => setShowRequestForm(true)} />
+
+      {/* 予約リクエスト登録フォーム */}
+      <RequestForm
+        open={showRequestForm}
+        onClose={() => setShowRequestForm(false)}
+        initialDate={selectedDate}
+      />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { chromium } from 'playwright';
 import {
   type Appointment,
   replaceAppointments,
+  reconcileRequests,
   logSync,
   supabase,
 } from '../lib/supabase.js';
@@ -86,6 +87,16 @@ const EXTRACT_SCRIPT = `
       var nameEl = block.querySelector('.scheduleReserveName');
       var customerName = (nameEl ? nameEl.textContent : '').trim().replace(/\\s*様$/, '').trim();
 
+      // かな名を取得（data属性、title属性、別要素から）
+      var customerNameKana = '';
+      if (nameEl) {
+        customerNameKana = nameEl.getAttribute('data-kana') || nameEl.getAttribute('title') || '';
+      }
+      if (!customerNameKana) {
+        var kanaEl = block.querySelector('.scheduleReserveNameKana, .scheduleReserveKana, [class*="Kana"], [class*="kana"]');
+        if (kanaEl) customerNameKana = (kanaEl.textContent || '').trim().replace(/\\s*様$/, '').trim();
+      }
+
       // サービスアイコン
       var icons = [];
       var iconLis = block.querySelectorAll('.scheduleReserveIconList li');
@@ -122,6 +133,7 @@ const EXTRACT_SCRIPT = `
         results.push({
           staffName: staffName,
           customerName: customerName,
+          customerNameKana: customerNameKana || '',
           startTime: startTime,
           endTime: endTime,
           services: icons.join(' / '),
@@ -271,6 +283,7 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
       const rawData = await page.evaluate(EXTRACT_SCRIPT) as {
         staffName: string;
         customerName: string;
+        customerNameKana: string;
         startTime: string;
         endTime: string;
         services: string;
@@ -298,6 +311,7 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
           end_time: item.endTime || undefined,
           title: item.services || '施術',
           customer_name: item.customerName || undefined,
+          customer_name_kana: item.customerNameKana || undefined,
           staff_name: item.staffName || undefined,
           service_types: item.services ? item.services.split(' / ') : [],
           appointment_type: item.type,
@@ -311,12 +325,23 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
         console.log(`  ${a.start_time}-${a.end_time ?? '??'} ${a.customer_name ?? a.title} (${a.staff_name})`);
       });
 
+      // かな辞書に自動登録
+      const kanaEntries = appointments
+        .filter(a => a.customer_name && a.customer_name_kana)
+        .map(a => ({ name: a.customer_name!, name_kana: a.customer_name_kana! }));
+      if (kanaEntries.length > 0) {
+        await supabase.from('customer_kana').upsert(kanaEntries, { onConflict: 'name', ignoreDuplicates: true });
+      }
+
       await replaceAppointments('harilabo', date, appointments);
       totalCount += appointments.length;
     }
 
     await logSync('harilabo', 'success', totalCount);
     console.log(`SALON BOARD: 同期完了 (${sortedDates.length}日, ${totalCount}件)`);
+
+    // 予約リクエストとの突き合わせ
+    await reconcileRequests(sortedDates);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('SALON BOARD: エラー', message);
