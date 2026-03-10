@@ -163,6 +163,11 @@ export async function syncGoogleCalendar(): Promise<void> {
     const veventCount = (ical.match(/BEGIN:VEVENT/g) || []).length;
     const appointments = parseVEvents(ical);
 
+    // 同期対象の開始日（今日、JST）
+    const now = new Date();
+    const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth() + 1).padStart(2, '0')}-${String(jstNow.getUTCDate()).padStart(2, '0')}`;
+
     console.log(`Google Calendar: ${appointments.length} 件のイベントを取得 (iCal内VEVENT: ${veventCount}件)`);
 
     if (appointments.length === 0 && veventCount > 0) {
@@ -171,7 +176,7 @@ export async function syncGoogleCalendar(): Promise<void> {
       return;
     }
 
-    await replaceAllBySource('personal', appointments);
+    await replaceAllBySource('personal', appointments, todayStr);
     await logSync('personal', 'success', appointments.length);
 
     console.log('Google Calendar: 同期完了');

@@ -32,20 +32,6 @@ export interface Appointment {
   raw_data?: Record<string, unknown>;
 }
 
-export type RequestChannel = 'line' | 'messenger' | 'gmail' | 'phone' | 'other';
-export type RequestStatus = 'pending' | 'registered' | 'cancelled';
-
-export interface AppointmentRequest {
-  id?: string;
-  customer_name: string;
-  date: string;
-  start_time: string;
-  end_time?: string;
-  source_channel: RequestChannel;
-  status: RequestStatus;
-  matched_appointment_id?: string;
-  message_text?: string;
-}
 
 // Supabaseへのupsert（重複防止）
 export async function upsertAppointments(appointments: Appointment[]) {
@@ -164,9 +150,11 @@ export async function replaceAppointments(
 
 // ソースの全データを削除して再挿入（全期間同期用）
 // 安全対策: 新データが0件の場合は削除しない（データ消失防止）
+// dateFrom: 同期対象の開始日（この日以降のみを比較・削除対象にする）
 export async function replaceAllBySource(
   source: AppointmentSource,
-  appointments: Appointment[]
+  appointments: Appointment[],
+  dateFrom?: string
 ) {
   // 新データが0件の場合、既存データを保持（誤削除防止）
   if (appointments.length === 0) {
@@ -178,10 +166,15 @@ export async function replaceAllBySource(
   await detectAndNotifyNew(source, appointments);
 
   // 既存件数を取得して異常な減少を検知
-  const { count: existingCount } = await supabase
+  // dateFrom が指定されている場合、同期対象範囲内の件数のみで比較
+  let existingQuery = supabase
     .from('appointments')
     .select('*', { count: 'exact', head: true })
     .eq('source', source);
+  if (dateFrom) {
+    existingQuery = existingQuery.gte('date', dateFrom);
+  }
+  const { count: existingCount } = await existingQuery;
 
   if (existingCount && existingCount > 0 && appointments.length < existingCount * 0.3) {
     console.warn(
@@ -216,14 +209,19 @@ export async function replaceAllBySource(
   }
 
   // 新データに含まれないレコードを削除（古いイベントのクリーンアップ）
+  // dateFrom が指定されている場合、同期対象範囲内のレコードのみ削除対象にする
   if (newExternalIds.length > 0) {
     const newIdSet = new Set(newExternalIds);
 
-    // 既存の全external_idを取得
-    const { data: existingRows, error: fetchError } = await supabase
+    // 同期対象範囲内の既存external_idを取得
+    let fetchQuery = supabase
       .from('appointments')
       .select('external_id')
       .eq('source', source);
+    if (dateFrom) {
+      fetchQuery = fetchQuery.gte('date', dateFrom);
+    }
+    const { data: existingRows, error: fetchError } = await fetchQuery;
 
     if (fetchError) {
       console.error(`[replaceAllBySource] ${source}: 既存ID取得失敗: ${fetchError.message}`);
@@ -253,145 +251,64 @@ export async function replaceAllBySource(
   }
 }
 
-/**
- * 予約リクエストとSALON BOARD予約の自動突き合わせ
- * - pending状態のリクエストとSALON BOARDの予約をマッチング
- * - 日付 + 時間（±30分）+ 顧客名（あいまい一致）でマッチ判定
- * - マッチしたら自動で registered に更新
- * - マッチしなければ通知テーブルにアラート挿入
- */
+
+// 時刻が近いかチェック（±30分以内）
+function isTimeClose(time1: string, time2: string, thresholdMinutes = 30): boolean {
+  const [h1, m1] = time1.split(':').map(Number);
+  const [h2, m2] = time2.split(':').map(Number);
+  const diff = Math.abs((h1 * 60 + m1) - (h2 * 60 + m2));
+  return diff <= thresholdMinutes;
+}
+
+// 名前のあいまい一致（姓のみ・部分一致対応）
+function isFuzzyNameMatch(requestName: string, appointmentName: string): boolean {
+  if (!requestName || !appointmentName) return false;
+  const r = requestName.replace(/\s+/g, '');
+  const a = appointmentName.replace(/\s+/g, '');
+  return r === a || a.includes(r) || r.includes(a);
+}
+
+// 予約リクエストとSALON BOARD予約の突き合わせ
 export async function reconcileRequests(dates: string[]) {
-  try {
-    // pending状態のリクエストを取得
-    const { data: pendingRequests, error: reqError } = await supabase
-      .from('appointment_requests')
-      .select('*')
-      .eq('status', 'pending')
-      .in('date', dates);
+  if (dates.length === 0) return;
 
-    if (reqError) {
-      console.error(`[reconcile] リクエスト取得失敗: ${reqError.message}`);
-      return;
+  // pending状態のリクエストを取得
+  const { data: requests, error: reqError } = await supabase
+    .from('appointment_requests')
+    .select('*')
+    .eq('status', 'pending')
+    .in('date', dates);
+
+  if (reqError || !requests || requests.length === 0) return;
+
+  // 該当日のSALON BOARD予約を取得
+  const { data: appointments, error: aptError } = await supabase
+    .from('appointments')
+    .select('*')
+    .eq('source', 'harilabo')
+    .in('date', dates);
+
+  if (aptError || !appointments) return;
+
+  for (const req of requests) {
+    const match = appointments.find(
+      a =>
+        a.date === req.date &&
+        isTimeClose(a.start_time, req.start_time) &&
+        isFuzzyNameMatch(req.customer_name, a.customer_name ?? '')
+    );
+
+    if (match) {
+      await supabase
+        .from('appointment_requests')
+        .update({
+          status: 'registered',
+          matched_appointment_id: match.id,
+        })
+        .eq('id', req.id);
+      console.log(`[reconcile] マッチ: ${req.customer_name} ${req.date} ${req.start_time} → ${match.id}`);
     }
-
-    if (!pendingRequests || pendingRequests.length === 0) {
-      console.log('[reconcile] pending リクエストなし');
-      return;
-    }
-
-    // 対象日のSALON BOARD予約を取得
-    const { data: appointments, error: aptError } = await supabase
-      .from('appointments')
-      .select('*')
-      .eq('source', 'harilabo')
-      .in('date', dates);
-
-    if (aptError) {
-      console.error(`[reconcile] 予約取得失敗: ${aptError.message}`);
-      return;
-    }
-
-    const aptList = appointments ?? [];
-    let matchCount = 0;
-
-    for (const req of pendingRequests) {
-      const match = aptList.find(apt => {
-        // 日付一致
-        if (apt.date !== req.date) return false;
-
-        // 時間（±30分以内）
-        if (!isTimeClose(req.start_time, apt.start_time, 30)) return false;
-
-        // 顧客名（あいまい一致）
-        if (!isFuzzyNameMatch(req.customer_name, apt.customer_name ?? '')) return false;
-
-        return true;
-      });
-
-      if (match) {
-        // マッチ → registered に更新
-        const { error: updateError } = await supabase
-          .from('appointment_requests')
-          .update({
-            status: 'registered',
-            matched_appointment_id: match.id,
-          })
-          .eq('id', req.id);
-
-        if (updateError) {
-          console.error(`[reconcile] ステータス更新失敗 (${req.id}): ${updateError.message}`);
-        } else {
-          matchCount++;
-          console.log(`[reconcile] マッチ: ${req.customer_name} ${req.date} ${req.start_time} → ${match.customer_name} ${match.start_time}`);
-        }
-      }
-    }
-
-    const unmatchedCount = pendingRequests.length - matchCount;
-    console.log(`[reconcile] 結果: ${matchCount}件マッチ, ${unmatchedCount}件未マッチ`);
-
-    // 未マッチが残っている場合、通知テーブルにアラート挿入
-    if (unmatchedCount > 0) {
-      const unmatched = pendingRequests.filter(req => {
-        return !aptList.some(apt =>
-          apt.date === req.date &&
-          isTimeClose(req.start_time, apt.start_time, 30) &&
-          isFuzzyNameMatch(req.customer_name, apt.customer_name ?? '')
-        );
-      });
-
-      const notifications = unmatched.map(req => ({
-        source: 'harilabo' as const,
-        date: req.date,
-        start_time: req.start_time,
-        end_time: req.end_time ?? null,
-        title: `SALON BOARD未登録: ${req.customer_name}`,
-        customer_name: req.customer_name,
-        staff_name: null,
-      }));
-
-      if (notifications.length > 0) {
-        const { error: notifError } = await supabase
-          .from('notifications')
-          .insert(notifications);
-
-        if (notifError) {
-          console.error(`[reconcile] 通知挿入失敗: ${notifError.message}`);
-        }
-      }
-    }
-  } catch (err) {
-    console.error('[reconcile] エラー:', err);
   }
-}
-
-/** 時間がtolerance分以内かチェック (HH:MM形式) */
-function isTimeClose(timeA: string, timeB: string, toleranceMinutes: number): boolean {
-  const toMin = (t: string) => {
-    const [h, m] = t.split(':').map(Number);
-    return h * 60 + m;
-  };
-  return Math.abs(toMin(timeA) - toMin(timeB)) <= toleranceMinutes;
-}
-
-/** 顧客名のあいまい一致（部分一致 or 姓のみ一致） */
-function isFuzzyNameMatch(nameA: string, nameB: string): boolean {
-  if (!nameA || !nameB) return false;
-  const a = nameA.replace(/\s+/g, '').trim();
-  const b = nameB.replace(/\s+/g, '').trim();
-
-  // 完全一致
-  if (a === b) return true;
-
-  // 部分一致（片方がもう片方を含む）
-  if (a.includes(b) || b.includes(a)) return true;
-
-  // 姓（最初の1〜3文字）が一致
-  const surnameA = a.slice(0, Math.min(3, a.length));
-  const surnameB = b.slice(0, Math.min(3, b.length));
-  if (surnameA.length >= 2 && surnameA === surnameB) return true;
-
-  return false;
 }
 
 // 同期ログ記録
