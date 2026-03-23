@@ -20,6 +20,7 @@ import {
   type Appointment,
   replaceAppointments,
   logSync,
+  isSourceSyncing,
   supabase,
 } from '../lib/supabase.js';
 import { today, saveSession } from '../lib/browser.js';
@@ -124,6 +125,15 @@ const EXTRACT_SCRIPT = `
       if (custEl) customerName = (custEl.textContent || '').trim().replace(/^!\\s*/, '').trim();
     }
 
+    // かな名を取得（data属性、title属性、別要素から）
+    var customerNameKana = '';
+    var kanaAttr = el.getAttribute('data-kana') || el.getAttribute('data-yomi') || el.getAttribute('title') || '';
+    if (kanaAttr) customerNameKana = kanaAttr;
+    if (!customerNameKana) {
+      var kanaEl2 = item.querySelector('[class*="kana"], [class*="yomi"], [class*="Kana"]');
+      if (kanaEl2) customerNameKana = (kanaEl2.textContent || '').trim();
+    }
+
     // 施術タイプ
     var icons = [];
     var iconEls = item.querySelectorAll('.icon');
@@ -138,6 +148,7 @@ const EXTRACT_SCRIPT = `
     results.push({
       staffName: staffName,
       customerName: customerName,
+      customerNameKana: customerNameKana || '',
       startTime: startTime,
       endTime: endTime,
       services: icons.join(' / '),
@@ -155,6 +166,12 @@ export async function scrapeReworks(dateStr?: string | string[]): Promise<void> 
   const browser = await chromium.launch({ headless: true });
 
   try {
+    // 二重プロセス防止: 既に同期中ならスキップ
+    if (await isSourceSyncing('sekkotwin')) {
+      console.log('レセプトワークス: 別プロセスで同期中のためスキップ');
+      await browser.close();
+      return;
+    }
     await logSync('sekkotwin', 'running');
 
     // Supabase からセッションを読み込み
@@ -316,6 +333,7 @@ export async function scrapeReworks(dateStr?: string | string[]): Promise<void> 
       const rawData = await popup.evaluate(EXTRACT_SCRIPT) as {
         staffName: string;
         customerName: string;
+        customerNameKana: string;
         startTime: string;
         endTime: string;
         services: string;
@@ -334,9 +352,6 @@ export async function scrapeReworks(dateStr?: string | string[]): Promise<void> 
       console.log(`  DOM抽出: ${rawData.length}件 スタッフ別:`, staffCounts);
 
       rawData.forEach((item) => {
-        // 佐藤 洋のデータのみ取得
-        if (!item.staffName.includes('佐藤') || !item.staffName.includes('洋')) return;
-
         const key = `${item.staffName}-${item.customerName}-${item.startTime}-${item.services}`;
         if (seen.has(key)) return;
         seen.add(key);
@@ -351,6 +366,7 @@ export async function scrapeReworks(dateStr?: string | string[]): Promise<void> 
           end_time: item.endTime || undefined,
           title: item.services || (item.type === 'task' ? '事務作業' : '施術'),
           customer_name: item.customerName || undefined,
+          customer_name_kana: item.customerNameKana || undefined,
           staff_name: item.staffName || undefined,
           service_types: item.services ? item.services.split(' / ') : [],
           appointment_type: item.type,
@@ -373,6 +389,14 @@ export async function scrapeReworks(dateStr?: string | string[]): Promise<void> 
       appointments.forEach(a => {
         console.log(`  ${a.start_time}-${a.end_time ?? '??'} ${a.customer_name ?? a.title} (${a.staff_name})`);
       });
+
+      // かな辞書に自動登録
+      const kanaEntries = appointments
+        .filter(a => a.customer_name && a.customer_name_kana)
+        .map(a => ({ name: a.customer_name!, name_kana: a.customer_name_kana! }));
+      if (kanaEntries.length > 0) {
+        await supabase.from('customer_kana').upsert(kanaEntries, { onConflict: 'name', ignoreDuplicates: true });
+      }
 
       await replaceAppointments('sekkotwin', targetDate, appointments);
       totalCount += appointments.length;

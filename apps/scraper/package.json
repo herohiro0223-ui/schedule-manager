@@ -8,10 +8,12 @@
     "scrape": "tsx src/index.ts",
     "scrape:salon": "tsx src/scrapers/salonboard.ts",
     "scrape:reworks": "tsx src/scrapers/reworks.ts",
-    "scrape:google": "tsx src/scrapers/google-calendar.ts"
+    "scrape:google": "tsx src/scrapers/google-calendar.ts",
+    "scrape:kana": "tsx src/scrapers/customer-kana.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.0",
+    "better-sqlite3": "^12.6.2",
     "dotenv": "^16.4.7",
     "googleapis": "^144.0.0",
     "node-cron": "^3.0.3",
@@ -20,6 +22,7 @@
     "tsdav": "^2.1.8"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "@types/node-cron": "^3.0.11",
     "postgres": "^3.4.8",

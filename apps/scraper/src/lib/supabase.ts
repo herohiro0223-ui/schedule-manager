@@ -116,35 +116,72 @@ async function detectAndNotifyNew(
   }
 }
 
-// 日付範囲の既存予約を削除して再挿入（external_idがない場合用）
+// 日付ごとの予約を同期（upsert + 古いレコード削除）
+// 旧方式（DELETE→INSERT）は同時実行時にduplicate keyエラーが発生するため
+// upsert→stale削除の安全なパターンに変更
 export async function replaceAppointments(
   source: AppointmentSource,
   date: string,
   appointments: Appointment[]
 ) {
-  // 削除前に新規予約を検知
+  // 新規予約を検知（通知用）
   await detectAndNotifyNew(source, appointments, { column: 'date', value: date });
 
-  // まず該当日のデータを削除
-  const { error: deleteError } = await supabase
+  if (appointments.length === 0) {
+    // データなしの場合は該当日のレコードを削除
+    const { error: deleteError } = await supabase
+      .from('appointments')
+      .delete()
+      .eq('source', source)
+      .eq('date', date);
+
+    if (deleteError) {
+      throw new Error(`Delete failed: ${deleteError.message}`);
+    }
+    return;
+  }
+
+  // 1. まず新データをupsert（データ消失を防ぐ）
+  const { error: upsertError } = await supabase
     .from('appointments')
-    .delete()
+    .upsert(appointments, {
+      onConflict: 'source,external_id',
+      ignoreDuplicates: false,
+    });
+
+  if (upsertError) {
+    throw new Error(`Upsert failed: ${upsertError.message}`);
+  }
+
+  // 2. 古いレコードを削除（DBにあるが新データに含まれないもの）
+  const newExternalIds = new Set(appointments.map(a => a.external_id).filter(Boolean));
+
+  const { data: existingRows, error: fetchError } = await supabase
+    .from('appointments')
+    .select('external_id')
     .eq('source', source)
     .eq('date', date);
 
-  if (deleteError) {
-    throw new Error(`Delete failed: ${deleteError.message}`);
+  if (fetchError) {
+    console.error(`[replaceAppointments] ${source}/${date}: 既存ID取得失敗: ${fetchError.message}`);
+    return;
   }
 
-  if (appointments.length === 0) return;
+  const staleIds = (existingRows ?? [])
+    .map(r => r.external_id as string)
+    .filter(id => id && !newExternalIds.has(id));
 
-  // 新しいデータを挿入
-  const { error: insertError } = await supabase
-    .from('appointments')
-    .insert(appointments);
+  if (staleIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from('appointments')
+      .delete()
+      .eq('source', source)
+      .eq('date', date)
+      .in('external_id', staleIds);
 
-  if (insertError) {
-    throw new Error(`Insert failed: ${insertError.message}`);
+    if (deleteError) {
+      console.error(`[replaceAppointments] ${source}/${date}: 古いレコード削除失敗: ${deleteError.message}`);
+    }
   }
 }
 
@@ -330,5 +367,57 @@ export async function logSync(
 
   if (error) {
     console.error(`Failed to log sync: ${error.message}`);
+  }
+}
+
+// 同じソースが既に同期中かチェック（二重プロセス防止）
+export async function isSourceSyncing(source: AppointmentSource): Promise<boolean> {
+  const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+
+  // 3分以上前の running レコードを自動クリーンアップ（クラッシュ時のロック残り対策）
+  const { data: staleRecords, error: cleanupError } = await supabase
+    .from('sync_logs')
+    .update({ status: 'error', error_message: 'タイムアウト（自動クリーンアップ）', completed_at: new Date().toISOString() })
+    .eq('source', source)
+    .eq('status', 'running')
+    .lt('started_at', threeMinutesAgo)
+    .select('id');
+
+  if (cleanupError) {
+    console.error(`[isSourceSyncing] クリーンアップ失敗: ${cleanupError.message}`);
+  } else if (staleRecords && staleRecords.length > 0) {
+    console.log(`[isSourceSyncing] ${source}: 古いロック ${staleRecords.length}件をクリア`);
+  }
+
+  // 3分以内の running レコードがあるかチェック
+  const { data, error } = await supabase
+    .from('sync_logs')
+    .select('id')
+    .eq('source', source)
+    .eq('status', 'running')
+    .gte('started_at', threeMinutesAgo)
+    .limit(1);
+
+  if (error) {
+    console.error(`[isSourceSyncing] チェック失敗: ${error.message}`);
+    return false; // エラー時は同期を許可
+  }
+  return (data?.length ?? 0) > 0;
+}
+
+// 起動時に全ソースの running ロックをクリア（前プロセスのクラッシュ対策）
+export async function clearAllSyncLocks(): Promise<void> {
+  const { data, error } = await supabase
+    .from('sync_logs')
+    .update({ status: 'error', error_message: 'プロセス再起動によるクリア', completed_at: new Date().toISOString() })
+    .eq('status', 'running')
+    .select('id, source');
+
+  if (error) {
+    console.error(`[clearAllSyncLocks] 失敗: ${error.message}`);
+  } else if (data && data.length > 0) {
+    console.log(`[clearAllSyncLocks] ${data.length}件のロックをクリア:`, data.map(r => r.source).join(', '));
+  } else {
+    console.log('[clearAllSyncLocks] 残存ロックなし');
   }
 }

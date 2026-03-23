@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase, type Appointment, type SyncLog } from '../lib/supabase';
+import { filterByStaff } from '../lib/filters';
 
 export function useAppointments(date: string) {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -21,12 +22,7 @@ export function useAppointments(date: string) {
     if (fetchError) {
       setError(fetchError.message);
     } else {
-      // ハリラボ・接骨院は佐藤洋の担当分のみ表示
-      const filtered = (data ?? []).filter((a) => {
-        if (a.source === 'personal' || a.source === 'icloud') return true;
-        return a.staff_name?.includes('佐藤') && a.staff_name?.includes('洋');
-      });
-      setAppointments(filtered);
+      setAppointments(filterByStaff(data ?? []));
     }
     setLoading(false);
   }, [date]);
@@ -34,22 +30,8 @@ export function useAppointments(date: string) {
   useEffect(() => {
     fetchAppointments();
 
-    // リアルタイム更新の購読
-    const channel = supabase
-      .channel('appointments-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'appointments',
-          filter: `date=eq.${date}`,
-        },
-        () => {
-          fetchAppointments();
-        }
-      )
-      .subscribe();
+    // 30秒ポーリング（Realtimeの代替 - 画面チカチカ防止）
+    const interval = setInterval(fetchAppointments, 30000);
 
     // アプリを開いた時・バックグラウンド復帰時に再取得
     const onVisible = () => {
@@ -60,7 +42,7 @@ export function useAppointments(date: string) {
     document.addEventListener('visibilitychange', onVisible);
 
     return () => {
-      supabase.removeChannel(channel);
+      clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [date, fetchAppointments]);
@@ -104,11 +86,7 @@ export function useMonthAppointments(year: number, month: number) {
       .lte('date', endDate)
       .order('start_time', { ascending: true });
 
-    const filtered = (data ?? []).filter((a) => {
-      if (a.source === 'personal' || a.source === 'icloud') return true;
-      return a.staff_name?.includes('佐藤') && a.staff_name?.includes('洋');
-    });
-    setAppointments(filtered);
+    setAppointments(filterByStaff(data ?? []));
     setLoading(false);
   }, [year, month]);
 

@@ -22,7 +22,7 @@ function getHeight(start: string, end?: string): number {
   if (!end) return HOUR_HEIGHT; // デフォルト1時間
   const startMin = timeToMinutes(start);
   const endMin = timeToMinutes(end);
-  return Math.max(((endMin - startMin) / 60) * HOUR_HEIGHT, 24);
+  return Math.max(((endMin - startMin) / 60) * HOUR_HEIGHT, 28);
 }
 
 export function Timeline({ appointments }: { appointments: Appointment[] }) {
@@ -35,15 +35,15 @@ export function Timeline({ appointments }: { appointments: Appointment[] }) {
   const showNowLine = nowMinutes >= START_HOUR * 60 && nowMinutes <= END_HOUR * 60;
 
   return (
-    <div className="relative" style={{ height: totalHeight + 20 }}>
+    <div className="relative animate-fade-in" style={{ height: totalHeight + 20 }}>
       {/* 時間軸 */}
       {HOURS.map((hour) => (
         <div
           key={hour}
-          className="absolute left-0 right-0 border-t border-gray-100"
+          className="absolute left-0 right-0 border-t border-gray-100/80"
           style={{ top: (hour - START_HOUR) * HOUR_HEIGHT }}
         >
-          <span className="absolute -top-2.5 left-0 text-[10px] text-gray-400 w-10 text-right pr-1">
+          <span className="absolute -top-2.5 left-0 text-[10px] text-gray-300 w-10 text-right pr-2 tabular-nums font-medium">
             {hour}:00
           </span>
         </div>
@@ -52,10 +52,12 @@ export function Timeline({ appointments }: { appointments: Appointment[] }) {
       {/* 現在時刻ライン */}
       {showNowLine && (
         <div
-          className="absolute left-10 right-0 h-0.5 bg-red-400 z-20"
+          className="absolute left-10 right-0 z-20"
           style={{ top: nowTop }}
         >
-          <div className="absolute -left-1.5 -top-1 w-3 h-3 rounded-full bg-red-400" />
+          <div className="relative h-[2px] bg-red-400 rounded-full">
+            <div className="absolute -left-1 -top-[3px] w-2 h-2 rounded-full bg-red-400 ring-2 ring-red-400/20" />
+          </div>
         </div>
       )}
 
@@ -69,29 +71,28 @@ export function Timeline({ appointments }: { appointments: Appointment[] }) {
           return (
             <div
               key={apt.id}
-              className="absolute left-0 right-2 rounded-md px-2 py-1 overflow-hidden border-l-3 cursor-pointer transition-all hover:shadow-md hover:z-10"
+              className="absolute left-0 right-2 rounded-lg px-2.5 py-1.5 overflow-hidden border-l-[3px] transition-all hover:shadow-md hover:z-10"
               style={{
                 top,
                 height,
                 borderLeftColor: config.color,
-                borderLeftWidth: 3,
-                backgroundColor: `${config.color}15`,
+                backgroundColor: `${config.color}12`,
                 zIndex: 1,
               }}
             >
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] font-medium" style={{ color: config.color }}>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-semibold tabular-nums" style={{ color: config.color }}>
                   {apt.start_time.substring(0, 5)}
                 </span>
-                <span className="text-[10px]" style={{ color: config.color }}>
+                <span className="text-[9px] font-medium px-1 py-px rounded" style={{ color: config.color, backgroundColor: `${config.color}15` }}>
                   {config.label}
                 </span>
               </div>
-              <p className="text-xs font-medium text-gray-800 truncate leading-tight">
+              <p className="text-xs font-semibold text-gray-800 truncate leading-tight mt-0.5">
                 {apt.title}
               </p>
-              {apt.customer_name && height > 36 && (
-                <p className="text-[10px] text-gray-500 truncate">
+              {apt.customer_name && height > 40 && (
+                <p className="text-[10px] text-gray-500 truncate mt-0.5">
                   {apt.customer_name} 様
                 </p>
               )}

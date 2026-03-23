@@ -24,21 +24,8 @@ export function useTasks(date: string) {
   useEffect(() => {
     fetchTasks();
 
-    const channel = supabase
-      .channel('tasks-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'tasks',
-          filter: `date=eq.${date}`,
-        },
-        () => {
-          fetchTasks();
-        }
-      )
-      .subscribe();
+    // 30秒ポーリング（Realtimeの代替）
+    const interval = setInterval(fetchTasks, 30000);
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
@@ -48,7 +35,7 @@ export function useTasks(date: string) {
     document.addEventListener('visibilitychange', onVisible);
 
     return () => {
-      supabase.removeChannel(channel);
+      clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [date, fetchTasks]);

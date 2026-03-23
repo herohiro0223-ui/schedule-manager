@@ -13,7 +13,20 @@ import {
   logSync,
 } from '../lib/supabase.js';
 
-/** iCal VEVENT からフィールドを抽出（日付フィルタなし） */
+/** 同期対象の日付範囲を計算（過去1ヶ月〜未来2ヶ月） */
+function getSyncDateRange(): { fromStr: string; toStr: string } {
+  const now = new Date();
+  const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const from = new Date(jstNow);
+  from.setUTCMonth(from.getUTCMonth() - 1);
+  const to = new Date(jstNow);
+  to.setUTCMonth(to.getUTCMonth() + 2);
+  const fmt = (d: Date) =>
+    `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  return { fromStr: fmt(from), toStr: fmt(to) };
+}
+
+/** iCal VEVENT からフィールドを抽出（過去1ヶ月〜未来2ヶ月） */
 function parseVEvent(ical: string): {
   uid: string;
   summary: string;
@@ -117,11 +130,12 @@ export async function syncICloudCalendar(): Promise<void> {
     console.log(`iCloud Calendar: ${eventCalendars.length} 個のカレンダーを同期`);
 
     const appointments: Appointment[] = [];
+    const { fromStr, toStr } = getSyncDateRange();
 
     for (const calendar of eventCalendars) {
       const displayName = calendar.displayName ?? '（名前なし）';
 
-      // 全イベントを取得（時間範囲なし）
+      // 全イベントを取得（CalDAVレベルではフィルタなし）
       const objects = await client.fetchCalendarObjects({
         calendar,
       });
@@ -132,6 +146,9 @@ export async function syncICloudCalendar(): Promise<void> {
 
         const parsed = parseVEvent(obj.data);
         if (!parsed) continue;
+
+        // 同期範囲外は除外（過去1ヶ月〜未来2ヶ月）
+        if (parsed.date < fromStr || parsed.date > toStr) continue;
 
         appointments.push({
           source: 'icloud',
@@ -156,7 +173,7 @@ export async function syncICloudCalendar(): Promise<void> {
       }
     }
 
-    console.log(`iCloud Calendar: 合計 ${appointments.length} 件のイベントを同期`);
+    console.log(`iCloud Calendar: 合計 ${appointments.length} 件のイベントを同期 (範囲: ${fromStr}〜${toStr})`);
 
     if (appointments.length === 0 && eventCalendars.length > 0) {
       console.warn('iCloud Calendar: カレンダーは存在するがイベントが0件。既存データを保持します。');
@@ -164,7 +181,7 @@ export async function syncICloudCalendar(): Promise<void> {
       return;
     }
 
-    await replaceAllBySource('icloud', appointments);
+    await replaceAllBySource('icloud', appointments, fromStr);
     await logSync('icloud', 'success', appointments.length);
 
     console.log('iCloud Calendar: 同期完了');

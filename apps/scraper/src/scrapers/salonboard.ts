@@ -10,9 +10,11 @@ import {
   replaceAppointments,
   reconcileRequests,
   logSync,
+  isSourceSyncing,
   supabase,
 } from '../lib/supabase.js';
 import { today, saveSession } from '../lib/browser.js';
+import { logSessionEvent, shouldRefreshSession } from '../lib/session-tracker.js';
 
 const LOGIN_URL = 'https://salonboard.com/login/';
 const SCHEDULE_URL = 'https://salonboard.com/KLP/schedule/salonSchedule/';
@@ -173,9 +175,16 @@ const EXTRACT_SCRIPT = `
 export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<void> {
   const dates = Array.isArray(dateStr) ? dateStr : [dateStr ?? today()];
   const sortedDates = [...dates].sort();
-  const browser = await chromium.launch({ headless: false });
+  const isRailway = !!process.env.RAILWAY_ENVIRONMENT;
+  const browser = await chromium.launch({ headless: isRailway });
 
   try {
+    // 二重プロセス防止: 既に同期中ならスキップ
+    if (await isSourceSyncing('harilabo')) {
+      console.log('SALON BOARD: 別プロセスで同期中のためスキップ');
+      await browser.close();
+      return;
+    }
     await logSync('harilabo', 'running');
 
     // Supabase からセッションを読み込み
@@ -208,8 +217,20 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
       await page.waitForTimeout(1000);
     } catch {}
 
+    // プロアクティブ更新チェック
+    const refreshCheck = await shouldRefreshSession('salonboard');
+    if (refreshCheck.shouldRefresh) {
+      console.log(`SALON BOARD: ${refreshCheck.reason} → プロアクティブ更新を推奨`);
+    }
+
     // ログインページにリダイレクトされた場合
     if (page.url().includes('login')) {
+      await logSessionEvent({
+        service: 'salonboard',
+        event_type: 'session_expired',
+        error_message: 'スケジュールページからログインページにリダイレクト',
+      });
+
       console.log('SALON BOARD: セッション切れ、自動ログインを試行...');
       await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
       await page.waitForTimeout(1000);
@@ -228,23 +249,41 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
         await page.waitForURL('**/KLP/**', { timeout: 60000 });
       } catch {
         const currentUrl = page.url();
-        if (currentUrl.includes('password')) {
-          throw new Error('パスワード変更が必要です。npx tsx src/relogin-salonboard.ts を実行してください');
-        }
-        throw new Error('自動ログイン失敗（CAPTCHAの可能性）。npx tsx src/relogin-salonboard.ts を実行してください');
+        const errMsg = currentUrl.includes('password')
+          ? 'パスワード変更が必要です。npx tsx src/relogin-salonboard.ts を実行してください'
+          : '自動ログイン失敗（CAPTCHAの可能性）。npx tsx src/relogin-salonboard.ts を実行してください';
+        await logSessionEvent({
+          service: 'salonboard',
+          event_type: 'auto_login_failed',
+          error_message: errMsg,
+        });
+        throw new Error(errMsg);
       }
       console.log('SALON BOARD: ログイン成功');
       await saveSession(context, 'salonboard');
+      await logSessionEvent({
+        service: 'salonboard',
+        event_type: 'auto_login_success',
+      });
+    } else {
+      // セッション有効
+      await logSessionEvent({
+        service: 'salonboard',
+        event_type: 'sync_success',
+      });
     }
 
     console.log(`SALON BOARD: ${sortedDates.length}日分のスケジュールを取得中...`);
     let totalCount = 0;
+    let todayTableNotFound = false;
+    const todayStr = today();
 
     for (const date of sortedDates) {
       const dateCompact = date.replace(/-/g, '');
 
       // ページ読み込み（最大3回リトライ）
       let loaded = false;
+      let reloginAttempted = false; // 無限ループ防止: 再ログインは1回のみ
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           await page.goto(`${SCHEDULE_URL}?date=${dateCompact}`, {
@@ -253,7 +292,46 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
           const url = page.url();
           if (url === 'about:blank') throw new Error('about:blank');
           if (url.includes('login')) {
-            throw new Error('セッション切れ。npx tsx src/relogin-salonboard.ts を実行してください');
+            if (reloginAttempted) {
+              throw new Error('セッション切れ。npx tsx src/relogin-salonboard.ts を実行してください');
+            }
+            reloginAttempted = true;
+
+            // 自動再ログインを試みる
+            console.log(`SALON BOARD: ${date} ループ中にセッション切れ検知、自動再ログインを試行...`);
+            await logSessionEvent({
+              service: 'salonboard',
+              event_type: 'session_expired',
+              error_message: `ループ中セッション切れ (date: ${date})`,
+            });
+
+            const loginId = process.env.SALON_BOARD_ID ?? '';
+            const password = process.env.SALON_BOARD_PASSWORD ?? '';
+            try {
+              await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+              await page.waitForTimeout(1000);
+              await page.fill('input[name="userId"]', loginId);
+              await page.fill('input[name="password"]', password);
+              await page.click('a.common-CNCcommon__primaryBtn');
+              await page.waitForURL('**/KLP/**', { timeout: 60000 });
+              console.log('SALON BOARD: ループ中の自動再ログイン成功');
+              await saveSession(context, 'salonboard');
+              await logSessionEvent({
+                service: 'salonboard',
+                event_type: 'auto_login_success',
+                error_message: `ループ中再ログイン成功 (date: ${date})`,
+              });
+              // リトライ: 同じ日付でもう一度試す
+              attempt = -1; // forループで+1されて0になり再試行
+              continue;
+            } catch {
+              await logSessionEvent({
+                service: 'salonboard',
+                event_type: 'auto_login_failed',
+                error_message: 'ループ中の自動再ログイン失敗',
+              });
+              throw new Error('セッション切れ。npx tsx src/relogin-salonboard.ts を実行してください');
+            }
           }
           loaded = true;
           break;
@@ -278,6 +356,10 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
         await page.waitForTimeout(2000);
       } catch {
         // 描画待ちタイムアウト（予約なしの日もある）
+        console.log(`SALON BOARD: ${date} スケジュールテーブル未検出 (URL: ${page.url()})`);
+        if (date === todayStr) {
+          todayTableNotFound = true;
+        }
       }
 
       const rawData = await page.evaluate(EXTRACT_SCRIPT) as {
@@ -294,7 +376,6 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
       const appointments: Appointment[] = [];
 
       rawData.forEach((item, idx) => {
-        if (!item.staffName.includes('佐藤') || !item.staffName.includes('洋')) return;
         // 休憩・ToDo・接骨院タスクは除外（予約のみ）
         if (item.type === 'todo') return;
         if (item.customerName === '接骨院' || item.services.includes('接骨院')) return;
@@ -340,8 +421,17 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
     await logSync('harilabo', 'success', totalCount);
     console.log(`SALON BOARD: 同期完了 (${sortedDates.length}日, ${totalCount}件)`);
 
-    // 予約リクエストとの突き合わせ
-    await reconcileRequests(sortedDates);
+    // セッション切れ検知ログ
+    if (todayTableNotFound) {
+      console.warn('SALON BOARD: セッション切れの可能性（スケジュールテーブル未検出）');
+    }
+
+    // 予約リクエストとの突き合わせ（失敗しても同期自体は成功扱い）
+    try {
+      await reconcileRequests(sortedDates);
+    } catch (e) {
+      console.error('SALON BOARD: reconcileRequests エラー（同期は成功）', e);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('SALON BOARD: エラー', message);

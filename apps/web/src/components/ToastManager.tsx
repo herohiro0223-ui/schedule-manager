@@ -11,31 +11,46 @@ interface ToastManagerProps {
 export function ToastManager({ onNavigateToDate }: ToastManagerProps) {
   const [queue, setQueue] = useState<Notification[]>([]);
   const [current, setCurrent] = useState<Notification | null>(null);
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const lastSeenIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    // Supabase RealtimeでINSERTを直接購読
-    const channel = supabase
-      .channel('toast-notifications')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'notifications',
-        },
-        (payload) => {
-          const notif = payload.new as Notification;
-          setQueue(prev => [...prev, notif]);
+    // 初回: 最新IDを記録（既存通知はトースト表示しない）
+    async function init() {
+      const { data } = await supabase
+        .from('notifications')
+        .select('id')
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (data?.[0]) {
+        lastSeenIdRef.current = data[0].id;
+      }
+    }
+    init();
+
+    // 15秒ポーリングで新規通知を検知（トースト用はやや頻度高め）
+    const interval = setInterval(async () => {
+      const { data } = await supabase
+        .from('notifications')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (data && data.length > 0 && lastSeenIdRef.current) {
+        const newNotifs: Notification[] = [];
+        for (const n of data) {
+          if (n.id === lastSeenIdRef.current) break;
+          newNotifs.push(n);
         }
-      )
-      .subscribe();
+        if (newNotifs.length > 0) {
+          lastSeenIdRef.current = data[0].id;
+          setQueue(prev => [...prev, ...newNotifs.reverse()]);
+        }
+      } else if (data && data.length > 0 && !lastSeenIdRef.current) {
+        lastSeenIdRef.current = data[0].id;
+      }
+    }, 15000);
 
-    channelRef.current = channel;
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => clearInterval(interval);
   }, []);
 
   // キューから1件ずつ表示

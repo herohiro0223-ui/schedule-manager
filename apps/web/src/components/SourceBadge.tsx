@@ -6,9 +6,9 @@ export function SourceBadge({ source }: { source: AppointmentSource }) {
   const config = SOURCE_CONFIG[source];
   return (
     <span
-      className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
+      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold tracking-wide uppercase"
       style={{
-        backgroundColor: `${config.color}20`,
+        backgroundColor: `${config.color}15`,
         color: config.color,
       }}
     >

@@ -11,6 +11,7 @@
     "scrape": "npm run scrape -w apps/scraper",
     "scrape:salon": "npm run scrape:salon -w apps/scraper",
     "scrape:reworks": "npm run scrape:reworks -w apps/scraper",
-    "scrape:google": "npm run scrape:google -w apps/scraper"
+    "scrape:google": "npm run scrape:google -w apps/scraper",
+    "scrape:kana": "npm run scrape:kana -w apps/scraper"
   }
 }

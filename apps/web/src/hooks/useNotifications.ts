@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase, type Notification } from '../lib/supabase';
 
 export function useNotifications() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
+  const lastSeenIdRef = useRef<string | null>(null);
+  const onNewNotificationRef = useRef<((n: Notification) => void) | null>(null);
 
   const fetchNotifications = useCallback(async () => {
     const { data } = await supabase
@@ -14,6 +16,19 @@ export function useNotifications() {
       .order('created_at', { ascending: false })
       .limit(50);
 
+    if (data && data.length > 0) {
+      // 新規通知を検知（ポーリングベース）
+      if (lastSeenIdRef.current && data[0].id !== lastSeenIdRef.current) {
+        const newNotifs = [];
+        for (const n of data) {
+          if (n.id === lastSeenIdRef.current) break;
+          newNotifs.push(n);
+        }
+        newNotifs.forEach(n => onNewNotificationRef.current?.(n));
+      }
+      lastSeenIdRef.current = data[0].id;
+    }
+
     setNotifications(data ?? []);
     setLoading(false);
   }, []);
@@ -21,40 +36,9 @@ export function useNotifications() {
   useEffect(() => {
     fetchNotifications();
 
-    // Realtime購読: INSERT時に先頭に追加
-    const channel = supabase
-      .channel('notifications-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'notifications',
-        },
-        (payload) => {
-          const newNotif = payload.new as Notification;
-          setNotifications(prev => [newNotif, ...prev].slice(0, 50));
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'notifications',
-        },
-        (payload) => {
-          const updated = payload.new as Notification;
-          setNotifications(prev =>
-            prev.map(n => (n.id === updated.id ? updated : n))
-          );
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    // 30秒ポーリング（Realtimeの代替）
+    const interval = setInterval(fetchNotifications, 30000);
+    return () => clearInterval(interval);
   }, [fetchNotifications]);
 
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -71,5 +55,18 @@ export function useNotifications() {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
 
-  return { notifications, loading, unreadCount, markAsRead, markAllAsRead, refetch: fetchNotifications };
+  /** 新規通知コールバック登録（ToastManager用） */
+  const onNewNotification = useCallback((cb: (n: Notification) => void) => {
+    onNewNotificationRef.current = cb;
+  }, []);
+
+  return {
+    notifications,
+    loading,
+    unreadCount,
+    markAsRead,
+    markAllAsRead,
+    refetch: fetchNotifications,
+    onNewNotification,
+  };
 }

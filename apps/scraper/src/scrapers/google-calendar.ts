@@ -10,12 +10,27 @@ import {
   type Appointment,
   replaceAllBySource,
   logSync,
+  isSourceSyncing,
 } from '../lib/supabase.js';
 
-/** iCal VEVENT からフィールドを抽出 */
+/** 同期対象の日付範囲を計算（過去1ヶ月〜未来2ヶ月） */
+function getSyncDateRange(): { fromStr: string; toStr: string } {
+  const now = new Date();
+  const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const from = new Date(jstNow);
+  from.setUTCMonth(from.getUTCMonth() - 1);
+  const to = new Date(jstNow);
+  to.setUTCMonth(to.getUTCMonth() + 2);
+  const fmt = (d: Date) =>
+    `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  return { fromStr: fmt(from), toStr: fmt(to) };
+}
+
+/** iCal VEVENT からフィールドを抽出（過去1ヶ月〜未来2ヶ月） */
 function parseVEvents(ical: string): Appointment[] {
   const appointments: Appointment[] = [];
   const blocks = ical.split('BEGIN:VEVENT');
+  const { fromStr, toStr } = getSyncDateRange();
 
   for (let i = 1; i < blocks.length; i++) {
     const block = blocks[i].split('END:VEVENT')[0];
@@ -56,15 +71,11 @@ function parseVEvents(ical: string): Appointment[] {
         ? new Date(+endMatch[1], +endMatch[2] - 1, +endMatch[3])
         : new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
 
-      // 過去のイベントは除外
-      const now = new Date();
-      const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-      const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth() + 1).padStart(2, '0')}-${String(jstNow.getUTCDate()).padStart(2, '0')}`;
-
       // 複数日にまたがる終日イベントは各日にアポイントメントを作成
       for (let d = new Date(startDate); d < endDate; d.setDate(d.getDate() + 1)) {
         const dayStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        if (dayStr < todayStr) continue;
+        // 同期範囲外は除外（過去1ヶ月〜未来2ヶ月）
+        if (dayStr < fromStr || dayStr > toStr) continue;
 
         appointments.push({
           source: 'personal',
@@ -110,12 +121,8 @@ function parseVEvents(ical: string): Appointment[] {
       endTime = end?.time;
     }
 
-    // 過去のイベントは除外（今日以降のみ、未来の制限なし）
-    const now = new Date();
-    const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-    const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth() + 1).padStart(2, '0')}-${String(jstNow.getUTCDate()).padStart(2, '0')}`;
-
-    if (date < todayStr) continue;
+    // 同期範囲外は除外（過去1ヶ月〜未来2ヶ月）
+    if (date < fromStr || date > toStr) continue;
 
     appointments.push({
       source: 'personal',
@@ -145,6 +152,11 @@ export async function syncGoogleCalendar(): Promise<void> {
   }
 
   try {
+    // 二重プロセス防止: 既に同期中ならスキップ
+    if (await isSourceSyncing('personal')) {
+      console.log('Google Calendar: 別プロセスで同期中のためスキップ');
+      return;
+    }
     await logSync('personal', 'running');
     console.log('Google Calendar: イベントを取得中...');
 
@@ -163,12 +175,10 @@ export async function syncGoogleCalendar(): Promise<void> {
     const veventCount = (ical.match(/BEGIN:VEVENT/g) || []).length;
     const appointments = parseVEvents(ical);
 
-    // 同期対象の開始日（今日、JST）
-    const now = new Date();
-    const jstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-    const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth() + 1).padStart(2, '0')}-${String(jstNow.getUTCDate()).padStart(2, '0')}`;
+    // 同期対象の開始日（過去1ヶ月前）
+    const { fromStr } = getSyncDateRange();
 
-    console.log(`Google Calendar: ${appointments.length} 件のイベントを取得 (iCal内VEVENT: ${veventCount}件)`);
+    console.log(`Google Calendar: ${appointments.length} 件のイベントを取得 (iCal内VEVENT: ${veventCount}件, 範囲: ${fromStr}〜)`);
 
     if (appointments.length === 0 && veventCount > 0) {
       console.warn('Google Calendar: VEVENTは存在するがパース結果が0件。既存データを保持します。');
@@ -176,7 +186,7 @@ export async function syncGoogleCalendar(): Promise<void> {
       return;
     }
 
-    await replaceAllBySource('personal', appointments, todayStr);
+    await replaceAllBySource('personal', appointments, fromStr);
     await logSync('personal', 'success', appointments.length);
 
     console.log('Google Calendar: 同期完了');
