@@ -1,0 +1,35 @@
+name: Sync SALON BOARD
+
+on:
+  schedule:
+    # 営業時間中4時間ごと（JST 6:00, 10:00, 14:00, 18:00）
+    - cron: '0 21 * * *'    # 06:00 JST
+    - cron: '0 1 * * *'     # 10:00 JST
+    - cron: '0 5 * * *'     # 14:00 JST
+    - cron: '0 9 * * *'     # 18:00 JST
+  workflow_dispatch:  # 手動実行（携帯のGitHubアプリからも可）
+
+env:
+  NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  SALON_BOARD_ID: ${{ secrets.SALON_BOARD_ID }}
+  SALON_BOARD_PASSWORD: ${{ secrets.SALON_BOARD_PASSWORD }}
+
+jobs:
+  sync-salonboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --workspace=apps/scraper
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Sync SALON BOARD
+        run: npx tsx apps/scraper/src/scrapers/salonboard.ts
+      - name: Sync Reworks
+        run: npx tsx apps/scraper/src/scrapers/reworks.ts
+        continue-on-error: true

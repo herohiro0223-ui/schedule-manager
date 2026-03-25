@@ -175,8 +175,8 @@ const EXTRACT_SCRIPT = `
 export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<void> {
   const dates = Array.isArray(dateStr) ? dateStr : [dateStr ?? today()];
   const sortedDates = [...dates].sort();
-  const isRailway = !!process.env.RAILWAY_ENVIRONMENT;
-  const browser = await chromium.launch({ headless: isRailway });
+  const isCI = !!process.env.RAILWAY_ENVIRONMENT || !!process.env.CI;
+  const browser = await chromium.launch({ headless: isCI });
 
   try {
     // 二重プロセス防止: 既に同期中ならスキップ
