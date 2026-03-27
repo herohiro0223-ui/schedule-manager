@@ -265,7 +265,7 @@ export async function scrapeReworks(dateStr?: string | string[]): Promise<void> 
     }
 
     // 指定日のデータを抽出する関数
-    async function scrapePopupDate(date: string): Promise<Appointment[]> {
+    async function scrapePopupDate(date: string): Promise<Appointment[] | null> {
       // 現在表示中の日付を確認
       const currentDate = await popup.evaluate(() => {
         const active = document.querySelector('li.active');
@@ -325,8 +325,8 @@ export async function scrapeReworks(dateStr?: string | string[]): Promise<void> 
           }
         }
         if (!clicked) {
-          console.log(`レセプトワークス: ${targetLabel} が見つかりませんでした`);
-          return [];
+          console.log(`レセプトワークス: ${targetLabel} が見つかりませんでした（既存データを保持）`);
+          return null; // ナビゲーション失敗 → 既存データ保持のシグナル
         }
       }
 
@@ -384,6 +384,11 @@ export async function scrapeReworks(dateStr?: string | string[]): Promise<void> 
 
     for (const targetDate of sortedDates) {
       const appointments = await scrapePopupDate(targetDate);
+
+      // ナビゲーション失敗時は既存データを保持してスキップ
+      if (appointments === null) {
+        continue;
+      }
 
       console.log(`レセプトワークス: ${targetDate} → ${appointments.length} 件`);
       appointments.forEach(a => {
