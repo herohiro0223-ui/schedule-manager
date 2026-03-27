@@ -345,8 +345,8 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
         }
       }
       if (!loaded) {
-        console.log(`SALON BOARD: ${date} スキップ`);
-        await replaceAppointments('harilabo', date, []);
+        console.log(`SALON BOARD: ${date} スキップ（既存データを保持）`);
+        // 接続失敗時は既存データを削除せず保持する
         continue;
       }
 
