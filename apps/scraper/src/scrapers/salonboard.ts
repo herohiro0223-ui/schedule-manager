@@ -351,10 +351,12 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
       }
 
       // スケジュール描画を待つ
+      let scheduleTableFound = true;
       try {
         await page.waitForSelector('.jscScheduleMainTableStaff', { timeout: 30000 });
         await page.waitForTimeout(2000);
       } catch {
+        scheduleTableFound = false;
         // 描画待ちタイムアウト（予約なしの日もある）
         console.log(`SALON BOARD: ${date} スケジュールテーブル未検出 (URL: ${page.url()})`);
         if (date === todayStr) {
@@ -405,6 +407,12 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
       appointments.forEach(a => {
         console.log(`  ${a.start_time}-${a.end_time ?? '??'} ${a.customer_name ?? a.title} (${a.staff_name})`);
       });
+
+      // スケジュールテーブル未検出 + 0件 = セッション切れの可能性 → 既存データ保持
+      if (!scheduleTableFound && appointments.length === 0) {
+        console.log(`SALON BOARD: ${date} スキップ（テーブル未検出＋0件、既存データを保持）`);
+        continue;
+      }
 
       // かな辞書に自動登録
       const kanaEntries = appointments

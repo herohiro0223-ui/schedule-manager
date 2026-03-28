@@ -1,6 +1,6 @@
 import type { Appointment } from './supabase';
 
-/** ハリラボ・接骨院は佐藤洋の担当分のみ。personal/icloud は全件通す */
+/** harilabo/sekkotwin は佐藤洋の担当分のみ表示。personal/icloud は全件通す */
 export function filterByStaff(appointments: Appointment[]): Appointment[] {
   return appointments.filter((a) => {
     if (a.source === 'personal' || a.source === 'icloud') return true;

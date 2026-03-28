@@ -128,16 +128,8 @@ export async function replaceAppointments(
   await detectAndNotifyNew(source, appointments, { column: 'date', value: date });
 
   if (appointments.length === 0) {
-    // データなしの場合は該当日のレコードを削除
-    const { error: deleteError } = await supabase
-      .from('appointments')
-      .delete()
-      .eq('source', source)
-      .eq('date', date);
-
-    if (deleteError) {
-      throw new Error(`Delete failed: ${deleteError.message}`);
-    }
+    // 新データが0件の場合は既存データを保持（セッション切れ等によるデータ消失を防止）
+    console.log(`[replaceAppointments] ${source}/${date}: 新データが0件のため既存データを保持`);
     return;
   }
 
