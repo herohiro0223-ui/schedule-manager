@@ -377,7 +377,7 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
       const seen = new Set<string>();
       const appointments: Appointment[] = [];
 
-      rawData.forEach((item, idx) => {
+      rawData.forEach((item) => {
         // 休憩・ToDo・接骨院タスクは除外（予約のみ）
         if (item.type === 'todo') return;
         if (item.customerName === '接骨院' || item.services.includes('接骨院')) return;
@@ -386,9 +386,12 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
         if (seen.has(key)) return;
         seen.add(key);
 
+        // 安定したexternal_id: 内容ベース（DOM順序に依存しない）
+        const stableId = `sb-${date}-${(item.staffName || '_')}-${(item.startTime || '_')}-${(item.customerName || '_')}`;
+
         appointments.push({
           source: 'harilabo',
-          external_id: `sb-${date}-${idx}`,
+          external_id: stableId,
           date: date,
           start_time: item.startTime || '00:00',
           end_time: item.endTime || undefined,
@@ -451,5 +454,18 @@ export async function scrapeSalonBoard(dateStr?: string | string[]): Promise<voi
 
 if (process.argv[1]?.includes('salonboard')) {
   const dateArg = process.argv[2];
-  scrapeSalonBoard(dateArg).then(() => process.exit(0));
+  if (dateArg) {
+    // 明示的な日付指定
+    scrapeSalonBoard(dateArg).then(() => process.exit(0));
+  } else {
+    // 引数なし: 今日 + 次の7日間を同期（過去データの消失を防ぐ）
+    const dates: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() + i);
+      dates.push(d.toISOString().slice(0, 10));
+    }
+    console.log(`SALON BOARD: デフォルト同期範囲 ${dates[0]} 〜 ${dates[dates.length - 1]}`);
+    scrapeSalonBoard(dates).then(() => process.exit(0));
+  }
 }

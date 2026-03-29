@@ -133,6 +133,20 @@ export async function replaceAppointments(
     return;
   }
 
+  // 既存件数を先に取得（部分スクレイプ検知用）
+  const { data: existingRows, error: fetchError } = await supabase
+    .from('appointments')
+    .select('external_id')
+    .eq('source', source)
+    .eq('date', date);
+
+  if (fetchError) {
+    console.error(`[replaceAppointments] ${source}/${date}: 既存ID取得失敗: ${fetchError.message}`);
+    return;
+  }
+
+  const existingCount = existingRows?.length ?? 0;
+
   // 1. まず新データをupsert（データ消失を防ぐ）
   const { error: upsertError } = await supabase
     .from('appointments')
@@ -145,25 +159,36 @@ export async function replaceAppointments(
     throw new Error(`Upsert failed: ${upsertError.message}`);
   }
 
-  // 2. 古いレコードを削除（DBにあるが新データに含まれないもの）
+  // 2. 部分スクレイプ保護: 既存データの50%以上が消える場合は削除しない
+  if (existingCount > 0 && appointments.length < existingCount * 0.5) {
+    console.warn(
+      `[replaceAppointments] ${source}/${date}: 既存${existingCount}件 → 新${appointments.length}件（50%以上減少）。` +
+      `部分スクレイプの可能性があるため削除をスキップ（upsertのみ実行済み）`
+    );
+    return;
+  }
+
+  // 3. 古いレコードを削除（DBにあるが新データに含まれないもの）
   const newExternalIds = new Set(appointments.map(a => a.external_id).filter(Boolean));
 
-  const { data: existingRows, error: fetchError } = await supabase
+  // upsert後に再取得（新IDが追加されている可能性）
+  const { data: currentRows, error: refetchError } = await supabase
     .from('appointments')
     .select('external_id')
     .eq('source', source)
     .eq('date', date);
 
-  if (fetchError) {
-    console.error(`[replaceAppointments] ${source}/${date}: 既存ID取得失敗: ${fetchError.message}`);
+  if (refetchError) {
+    console.error(`[replaceAppointments] ${source}/${date}: 再取得失敗: ${refetchError.message}`);
     return;
   }
 
-  const staleIds = (existingRows ?? [])
+  const staleIds = (currentRows ?? [])
     .map(r => r.external_id as string)
     .filter(id => id && !newExternalIds.has(id));
 
   if (staleIds.length > 0) {
+    console.log(`[replaceAppointments] ${source}/${date}: ${staleIds.length}件の古いレコードを削除`);
     const { error: deleteError } = await supabase
       .from('appointments')
       .delete()
